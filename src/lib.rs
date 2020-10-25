@@ -1829,14 +1829,19 @@ impl Connection {
                         .ack(data.off(), data.len());
                 },
 
-                frame::Frame::Stream { stream_id, data } => {
+                frame::Frame::StreamHeader {
+                    stream_id,
+                    offset,
+                    length,
+                    ..
+                } => {
                     let stream = match self.streams.get_mut(stream_id) {
                         Some(v) => v,
 
                         None => continue,
                     };
 
-                    stream.send.ack(data.off(), data.len());
+                    stream.send.ack_and_drop(offset, length);
 
                     if stream.is_complete() {
                         let local = stream.local;
@@ -1973,7 +1978,12 @@ impl Connection {
                     self.pkt_num_spaces[epoch].crypto_stream.send.push(data)?;
                 },
 
-                frame::Frame::Stream { stream_id, data } => {
+                frame::Frame::StreamHeader {
+                    stream_id,
+                    offset,
+                    length,
+                    fin,
+                } => {
                     let stream = match self.streams.get_mut(stream_id) {
                         Some(v) => v,
 
@@ -1982,9 +1992,9 @@ impl Connection {
 
                     let was_flushable = stream.is_flushable();
 
-                    let empty_fin = data.is_empty() && data.fin();
+                    let empty_fin = length == 0 && fin;
 
-                    stream.send.push(data)?;
+                    stream.send.retransmit(offset, length);
 
                     // If the stream is now flushable push it to the flushable
                     // queue, but only if it wasn't already queued.
@@ -2380,10 +2390,8 @@ impl Connection {
                 // Try to accurately account for the STREAM frame's overhead,
                 // such that we can fill as much of the packet buffer as
                 // possible.
-                let overhead = 1 +
-                    octets::varint_len(stream_id) +
-                    octets::varint_len(off) +
-                    octets::varint_len(left as u64);
+                let overhead =
+                    1 + octets::varint_len(stream_id) + octets::varint_len(off);
 
                 let max_len = match left.checked_sub(overhead) {
                     Some(v) => v,
@@ -2391,15 +2399,38 @@ impl Connection {
                     None => continue,
                 };
 
-                let stream_buf = stream.send.pop(max_len)?;
+                let frame_offset = b.off();
 
-                if stream_buf.is_empty() && !stream_buf.fin() {
-                    continue;
+                // Encode the frame.
+                //
+                // Instead of creating a `frame::Frame` object, encode the frame
+                // directly into the packet buffer.
+                //
+                // Never encode length (assume STREAM is the last frame).
+                // TODO: encode if length is zero to reach minimum payload len.
+                let stream_off = stream.send.off_front();
+
+                frame::encode_stream_header(
+                    stream_id, stream_off, None, false, &mut b,
+                )?;
+
+                // Write stream data into the packet buffer.
+                let (len, fin) = stream.send.emit(&mut b.as_mut()[..max_len])?;
+
+                // Advance the packet buffer's offset.
+                b.skip(len)?;
+
+                // Encode the fin flag.
+                if fin {
+                    let (_, mut frame_buf) = b.split_at(frame_offset)?;
+                    frame_buf.as_mut()[0] |= 0x01;
                 }
 
-                let frame = frame::Frame::Stream {
+                let frame = frame::Frame::StreamHeader {
                     stream_id,
-                    data: stream_buf,
+                    offset: stream_off,
+                    length: len,
+                    fin,
                 };
 
                 if push_frame_to_pkt!(b, frames, frame, left) {
@@ -3796,6 +3827,8 @@ impl Connection {
 
                 self.rx_data += max_off_delta;
             },
+
+            frame::Frame::StreamHeader { .. } => unreachable!(),
 
             frame::Frame::MaxData { max } => {
                 self.max_tx_data = cmp::max(self.max_tx_data, max);

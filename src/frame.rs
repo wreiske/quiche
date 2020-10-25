@@ -74,6 +74,13 @@ pub enum Frame {
         data: stream::RangeBuf,
     },
 
+    StreamHeader {
+        stream_id: u64,
+        offset: u64,
+        length: usize,
+        fin: bool,
+    },
+
     MaxData {
         max: u64,
     },
@@ -383,25 +390,18 @@ impl Frame {
             },
 
             Frame::Stream { stream_id, data } => {
-                let mut ty: u8 = 0x08;
+                encode_stream_header(
+                    *stream_id,
+                    data.off() as u64,
+                    Some(data.len() as u64),
+                    data.fin(),
+                    b,
+                )?;
 
-                // Always encode offset
-                ty |= 0x04;
-
-                // Always encode length
-                ty |= 0x02;
-
-                if data.fin() {
-                    ty |= 0x01;
-                }
-
-                b.put_varint(u64::from(ty))?;
-
-                b.put_varint(*stream_id)?;
-                b.put_varint(data.off() as u64)?;
-                b.put_varint(data.len() as u64)?;
                 b.put_bytes(data.as_ref())?;
             },
+
+            Frame::StreamHeader { .. } => (),
 
             Frame::MaxData { max } => {
                 b.put_varint(0x10)?;
@@ -601,6 +601,18 @@ impl Frame {
                 data.len() // data
             },
 
+            Frame::StreamHeader {
+                stream_id,
+                offset,
+                length,
+                ..
+            } => {
+                1 + // frame type
+                octets::varint_len(*stream_id) + // stream_id
+                octets::varint_len(*offset) + // offset (length is not encoded)
+                length // data
+            },
+
             Frame::MaxData { max } => {
                 1 + // frame type
                 octets::varint_len(*max) // max
@@ -772,6 +784,19 @@ impl Frame {
                 None,
             ),
 
+            Frame::StreamHeader {
+                stream_id,
+                offset,
+                length,
+                fin,
+            } => qlog::QuicFrame::stream(
+                stream_id.to_string(),
+                offset.to_string(),
+                length.to_string(),
+                *fin,
+                None,
+            ),
+
             Frame::MaxData { max } => qlog::QuicFrame::max_data(max.to_string()),
 
             Frame::MaxStreamData { stream_id, max } =>
@@ -926,6 +951,19 @@ impl std::fmt::Debug for Frame {
                 )?;
             },
 
+            Frame::StreamHeader {
+                stream_id,
+                offset,
+                length,
+                fin,
+            } => {
+                write!(
+                    f,
+                    "STREAM id={} off={} len={} fin={}",
+                    stream_id, offset, length, fin
+                )?;
+            },
+
             Frame::MaxData { max } => {
                 write!(f, "MAX_DATA max={}", max)?;
             },
@@ -1049,6 +1087,36 @@ fn parse_ack_frame(_ty: u64, b: &mut octets::Octets) -> Result<Frame> {
     }
 
     Ok(Frame::ACK { ack_delay, ranges })
+}
+
+pub fn encode_stream_header(
+    stream_id: u64, offset: u64, length: Option<u64>, fin: bool,
+    b: &mut octets::OctetsMut,
+) -> Result<()> {
+    let mut ty: u8 = 0x08;
+
+    // Always encode offset.
+    ty |= 0x04;
+
+    // Encode length if available.
+    if length.is_some() {
+        ty |= 0x02;
+    }
+
+    if fin {
+        ty |= 0x01;
+    }
+
+    b.put_varint(u64::from(ty))?;
+
+    b.put_varint(stream_id)?;
+    b.put_varint(offset)?;
+
+    if let Some(len) = length {
+        b.put_varint(len)?;
+    }
+
+    Ok(())
 }
 
 fn parse_stream_frame(ty: u64, b: &mut octets::Octets) -> Result<Frame> {

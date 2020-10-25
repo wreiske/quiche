@@ -1170,24 +1170,18 @@ impl SendBuf {
     pub fn retransmit(&mut self, off: u64, len: usize) {
         let max_off = off + len as u64;
 
-        if self.data.is_empty() || off > self.data[0].max_off() {
+        if self.data.is_empty() {
             return;
         }
 
         for (i, buf) in self.data.iter_mut().enumerate() {
-            if off > buf.max_off() {
+            if max_off < buf.off {
                 break;
             }
 
-            if max_off < buf.off {
+            if off > buf.max_off() {
                 continue;
             }
-
-            // buf.end = if max_off < buf.max_off() && buf.pos == buf.end {
-            //     (max_off - buf.off) as usize
-            // } else {
-            //     buf.end
-            // };
 
             buf.pos = if off > buf.off {
                 cmp::min(buf.pos, (off - buf.off) as usize)

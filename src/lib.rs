@@ -1994,8 +1994,17 @@ impl Connection {
 
                     let empty_fin = length == 0 && fin;
 
+                    error!(
+                        "RETRANSMIT s={} {} {} {}",
+                        stream_id, offset, length, fin
+                    );
                     stream.send.retransmit(offset, length);
 
+                    error!(
+                        "RETRANSMIT FLUSH? s={} {}",
+                        stream_id,
+                        stream.send.off_front()
+                    );
                     // If the stream is now flushable push it to the flushable
                     // queue, but only if it wasn't already queued.
                     //
@@ -2009,6 +2018,7 @@ impl Connection {
                             urgency,
                             incremental,
                         );
+                        error!("RETRANSMIT GLU GLUG LGU");
                     }
                 },
 
@@ -2268,6 +2278,7 @@ impl Connection {
 
                 if push_frame_to_pkt!(b, frames, frame, left) {
                     self.streams.mark_blocked(stream_id, false, 0);
+                    error!("BLOCKED s={}", stream_id);
 
                     ack_eliciting = true;
                     in_flight = true;
@@ -2701,7 +2712,7 @@ impl Connection {
             return Err(Error::Done);
         }
 
-        #[cfg(feature = "qlog")]
+        // #[cfg(feature = "qlog")]
         let offset = stream.recv.off_front();
 
         let (read, fin) = stream.recv.emit(out)?;
@@ -2719,10 +2730,12 @@ impl Connection {
         }
 
         if !readable {
+            error!("NOT READ s={} {} {} {}", stream_id, offset, read, fin);
             self.streams.mark_readable(stream_id, false);
         }
 
         if complete {
+            error!("COMPLETE s={} {} {} {}", stream_id, offset, read, fin);
             self.streams.collect(stream_id, local);
         }
 
@@ -3819,9 +3832,12 @@ impl Connection {
                     return Err(Error::FlowControl);
                 }
 
+                let was_readable = stream.is_readable();
+
                 stream.recv.write(data)?;
 
-                if stream.is_readable() {
+                if stream.is_readable() && !was_readable {
+                    error!("READY s={} {}", stream_id, stream.recv.off_front());
                     self.streams.mark_readable(stream_id, true);
                 }
 

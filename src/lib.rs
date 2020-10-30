@@ -809,6 +809,12 @@ pub struct Connection {
     /// Total number of sent packets.
     sent_count: usize,
 
+    /// Total number of sent bytes without calling recv().
+    sent_bytes_burst: usize,
+
+    /// Max number of sent bytes without calling recv().
+    sent_bytes_max_burst: usize,
+
     /// Total number of bytes received from the peer.
     rx_data: u64,
 
@@ -1159,6 +1165,9 @@ impl Connection {
             recv_count: 0,
             sent_count: 0,
 
+            sent_bytes_burst: 0,
+            sent_bytes_max_burst: recovery::INITIAL_WINDOW,
+
             rx_data: 0,
             max_rx_data,
             max_rx_data_next: max_rx_data,
@@ -1417,6 +1426,9 @@ impl Connection {
             done += read;
             left -= read;
         }
+
+        // Reset burst counter.
+        self.sent_bytes_burst = 0;
 
         Ok(done)
     }
@@ -1934,6 +1946,19 @@ impl Connection {
     /// # Ok::<(), quiche::Error>(())
     /// ```
     pub fn send(&mut self, out: &mut [u8]) -> Result<usize> {
+        // Burst protection: don't send more than `sent_bytes_max_burst`
+        // bytes when calling send() consecutively. This counter will be
+        // reset when calling recv().
+        // Note that this need to be disabled if pacing enabled
+        if self.sent_bytes_burst > self.sent_bytes_max_burst {
+            if self.recovery.lost_count == 0 {
+                // Try to increase the burst limit if there is no loss.
+                self.sent_bytes_max_burst =
+                    cmp::max(recovery::INITIAL_WINDOW, self.recovery.cwnd() / 2);
+            }
+            return Err(Error::Done);
+        }
+
         let now = time::Instant::now();
 
         if out.is_empty() {
@@ -2599,6 +2624,8 @@ impl Connection {
         if ack_eliciting {
             self.ack_eliciting_sent = true;
         }
+
+        self.sent_bytes_burst += written;
 
         Ok(written)
     }

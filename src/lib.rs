@@ -306,6 +306,9 @@ const MAX_ACK_RANGES: usize = 68;
 // The highest possible stream ID allowed.
 const MAX_STREAM_ID: u64 = 1 << 60;
 
+/// The default max_datagram_size in the congestion control.
+pub const MAX_DATAGRAM_SIZE: usize = 1200;
+
 // The default length of DATAGRAM queues.
 const DEFAULT_MAX_DGRAM_QUEUE_LEN: usize = 0;
 
@@ -440,6 +443,8 @@ pub struct Config {
 
     dgram_recv_max_queue_len: usize,
     dgram_send_max_queue_len: usize,
+
+    max_datagram_size: usize,
 }
 
 impl Config {
@@ -465,6 +470,8 @@ impl Config {
 
             dgram_recv_max_queue_len: DEFAULT_MAX_DGRAM_QUEUE_LEN,
             dgram_send_max_queue_len: DEFAULT_MAX_DGRAM_QUEUE_LEN,
+
+            max_datagram_size: MAX_DATAGRAM_SIZE,
         })
     }
 
@@ -768,6 +775,13 @@ impl Config {
         };
         self.dgram_recv_max_queue_len = recv_queue_len;
         self.dgram_send_max_queue_len = send_queue_len;
+    }
+
+    /// Sets the maximum datagram size used by the congestion control.
+    ///
+    /// The default and minimum value is `1200`.
+    pub fn set_max_datagram_size(&mut self, v: usize) {
+        self.max_datagram_size = cmp::max(v, MAX_DATAGRAM_SIZE);
     }
 }
 
@@ -6846,7 +6860,7 @@ mod tests {
 
         // Server sends stream data bigger than cwnd.
         let send_buf1 = [0; 20000];
-        assert_eq!(pipe.server.stream_send(0, &send_buf1, false), Ok(14085));
+        assert_eq!(pipe.server.stream_send(0, &send_buf1, false), Ok(11565));
         assert_eq!(pipe.advance(&mut buf), Ok(()));
 
         // We can't create a new packet header because there is no room by cwnd.
@@ -6883,7 +6897,7 @@ mod tests {
 
         // Server sends stream data bigger than cwnd.
         let send_buf1 = [0; 20000];
-        assert_eq!(pipe.server.stream_send(0, &send_buf1, false), Ok(14085));
+        assert_eq!(pipe.server.stream_send(0, &send_buf1, false), Ok(11565));
         assert_eq!(pipe.advance(&mut buf), Ok(()));
 
         // We can't create a new packet header because there is no room by cwnd.
@@ -6920,7 +6934,7 @@ mod tests {
 
         // Server sends stream data bigger than cwnd.
         let send_buf1 = [0; 20000];
-        assert_eq!(pipe.server.stream_send(0, &send_buf1, false), Ok(14085));
+        assert_eq!(pipe.server.stream_send(0, &send_buf1, false), Ok(11565));
         assert_eq!(pipe.advance(&mut buf), Ok(()));
 
         // We can't create a new frame because there is no room by cwnd.

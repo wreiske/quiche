@@ -188,6 +188,9 @@ void quiche_config_enable_dgram(quiche_config *config, bool enabled,
                                 size_t recv_queue_len,
                                 size_t send_queue_len);
 
+// Sets the maximum datagram size used by the congestion control.
+void quiche_config_set_max_datagram_size(quiche_config *config, size_t v);
+
 // Frees the config object.
 void quiche_config_free(quiche_config *config);
 

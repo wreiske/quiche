@@ -250,6 +250,13 @@ pub extern fn quiche_config_enable_dgram(
 }
 
 #[no_mangle]
+pub extern fn quiche_config_set_max_datagram_size(
+    config: &mut Config, v: size_t,
+) {
+    config.set_max_datagram_size(v);
+}
+
+#[no_mangle]
 pub extern fn quiche_config_free(config: *mut Config) {
     unsafe { Box::from_raw(config) };
 }

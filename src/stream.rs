@@ -1908,16 +1908,20 @@ mod tests {
 
     #[test]
     fn empty_write() {
+        let mut buf = [0; 5];
+
         let mut send = SendBuf::new(std::u64::MAX);
         assert_eq!(send.len, 0);
 
-        let write = send.pop(std::usize::MAX).unwrap();
-        assert_eq!(write.len(), 0);
-        assert_eq!(write.fin(), false);
+        let (written, fin) = send.emit(&mut buf).unwrap();
+        assert_eq!(written, 0);
+        assert_eq!(fin, false);
     }
 
     #[test]
     fn multi_write() {
+        let mut buf = [0; 128];
+
         let mut send = SendBuf::new(std::u64::MAX);
         assert_eq!(send.len, 0);
 
@@ -1930,15 +1934,17 @@ mod tests {
         assert!(send.push_slice(second, true).is_ok());
         assert_eq!(send.len, 19);
 
-        let write = send.pop(128).unwrap();
-        assert_eq!(write.len(), 19);
-        assert_eq!(write.fin(), true);
-        assert_eq!(&write[..], b"somethinghelloworld");
+        let (written, fin) = send.emit(&mut buf[..128]).unwrap();
+        assert_eq!(written, 19);
+        assert_eq!(fin, true);
+        assert_eq!(&buf[..written], b"somethinghelloworld");
         assert_eq!(send.len, 0);
     }
 
     #[test]
     fn split_write() {
+        let mut buf = [0; 10];
+
         let mut send = SendBuf::new(std::u64::MAX);
         assert_eq!(send.len, 0);
 
@@ -1951,30 +1957,34 @@ mod tests {
         assert!(send.push_slice(second, true).is_ok());
         assert_eq!(send.len, 19);
 
-        let write = send.pop(10).unwrap();
-        assert_eq!(write.off(), 0);
-        assert_eq!(write.len(), 10);
-        assert_eq!(write.fin(), false);
-        assert_eq!(&write[..], b"somethingh");
+        assert_eq!(send.off_front(), 0);
+
+        let (written, fin) = send.emit(&mut buf[..10]).unwrap();
+        assert_eq!(written, 10);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"somethingh");
+        assert_eq!(send.off_front(), 10);
         assert_eq!(send.len, 9);
 
-        let write = send.pop(5).unwrap();
-        assert_eq!(write.off(), 10);
-        assert_eq!(write.len(), 5);
-        assert_eq!(write.fin(), false);
-        assert_eq!(&write[..], b"ellow");
+        let (written, fin) = send.emit(&mut buf[..5]).unwrap();
+        assert_eq!(written, 5);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"ellow");
+        assert_eq!(send.off_front(), 15);
         assert_eq!(send.len, 4);
 
-        let write = send.pop(10).unwrap();
-        assert_eq!(write.off(), 15);
-        assert_eq!(write.len(), 4);
-        assert_eq!(write.fin(), true);
-        assert_eq!(&write[..], b"orld");
+        let (written, fin) = send.emit(&mut buf[..10]).unwrap();
+        assert_eq!(written, 4);
+        assert_eq!(fin, true);
+        assert_eq!(&buf[..written], b"orld");
+        assert_eq!(send.off_front(), 19);
         assert_eq!(send.len, 0);
     }
 
     #[test]
     fn resend() {
+        let mut buf = [0; 15];
+
         let mut send = SendBuf::new(std::u64::MAX);
         assert_eq!(send.len, 0);
         assert_eq!(send.off_front(), 0);
@@ -1988,51 +1998,48 @@ mod tests {
         assert!(send.push_slice(second, true).is_ok());
         assert_eq!(send.off_front(), 0);
 
-        let write1 = send.pop(4).unwrap();
-        assert_eq!(write1.off(), 0);
-        assert_eq!(write1.len(), 4);
-        assert_eq!(write1.fin(), false);
-        assert_eq!(&write1[..], b"some");
+        assert_eq!(send.len, 19);
+
+        let (written, fin) = send.emit(&mut buf[..4]).unwrap();
+        assert_eq!(written, 4);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"some");
         assert_eq!(send.len, 15);
         assert_eq!(send.off_front(), 4);
 
-        let write2 = send.pop(5).unwrap();
-        assert_eq!(write2.off(), 4);
-        assert_eq!(write2.len(), 5);
-        assert_eq!(write2.fin(), false);
-        assert_eq!(&write2[..], b"thing");
+        let (written, fin) = send.emit(&mut buf[..5]).unwrap();
+        assert_eq!(written, 5);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"thing");
         assert_eq!(send.len, 10);
         assert_eq!(send.off_front(), 9);
 
-        let write3 = send.pop(5).unwrap();
-        assert_eq!(write3.off(), 9);
-        assert_eq!(write3.len(), 5);
-        assert_eq!(write3.fin(), false);
-        assert_eq!(&write3[..], b"hello");
+        let (written, fin) = send.emit(&mut buf[..5]).unwrap();
+        assert_eq!(written, 5);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"hello");
         assert_eq!(send.len, 5);
         assert_eq!(send.off_front(), 14);
 
-        send.push(write2).unwrap();
+        send.retransmit(4, 5);
         assert_eq!(send.len, 10);
         assert_eq!(send.off_front(), 4);
 
-        send.push(write1).unwrap();
+        send.retransmit(0, 4);
         assert_eq!(send.len, 14);
         assert_eq!(send.off_front(), 0);
 
-        let write4 = send.pop(11).unwrap();
-        assert_eq!(write4.off(), 0);
-        assert_eq!(write4.len(), 9);
-        assert_eq!(write4.fin(), false);
-        assert_eq!(&write4[..], b"something");
+        let (written, fin) = send.emit(&mut buf[..11]).unwrap();
+        assert_eq!(written, 9);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"something");
         assert_eq!(send.len, 5);
         assert_eq!(send.off_front(), 14);
 
-        let write5 = send.pop(11).unwrap();
-        assert_eq!(write5.off(), 14);
-        assert_eq!(write5.len(), 5);
-        assert_eq!(write5.fin(), true);
-        assert_eq!(&write5[..], b"world");
+        let (written, fin) = send.emit(&mut buf[..11]).unwrap();
+        assert_eq!(written, 5);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"world");
         assert_eq!(send.len, 0);
         assert_eq!(send.off_front(), 19);
     }
@@ -2508,25 +2515,27 @@ mod tests {
 
     #[test]
     fn send_fin_zero_length_output() {
+        let mut buf = [0; 5];
+
         let mut stream = Stream::new(0, 15, true, true);
 
         assert_eq!(stream.send.push_slice(b"hello", false), Ok(5));
+        assert_eq!(stream.send.off_front(), 0);
         assert!(!stream.send.is_fin());
 
-        let write = stream.send.pop(5).unwrap();
-        assert_eq!(write.off(), 0);
-        assert_eq!(write.len(), 5);
-        assert_eq!(write.fin(), false);
-        assert_eq!(write.data, b"hello");
+        let (written, fin) = stream.send.emit(&mut buf).unwrap();
+        assert_eq!(written, 5);
+        assert_eq!(fin, false);
+        assert_eq!(&buf[..written], b"hello");
 
         assert_eq!(stream.send.push_slice(b"", true), Ok(0));
         assert!(stream.send.is_fin());
+        assert_eq!(stream.send.off_front(), 5);
 
-        let write = stream.send.pop(5).unwrap();
-        assert_eq!(write.off(), 5);
-        assert_eq!(write.len(), 0);
-        assert_eq!(write.fin(), true);
-        assert_eq!(write.data, b"");
+        let (written, fin) = stream.send.emit(&mut buf).unwrap();
+        assert_eq!(written, 0);
+        assert_eq!(fin, true);
+        assert_eq!(&buf[..written], b"");
     }
 
     #[test]
